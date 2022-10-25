@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -32,6 +33,7 @@ var (
 	perMonitorNumWS = flag.Int("numws", 10, "number of workspaces per monitor")
 	startNumber     = flag.Int("numstart", 1, "first workspace number (0 or 1)")
 	i3sock          = flag.String("i3sock", "I3SOCK", "envvar for the unix socket")
+	monitorSetup    = flag.Bool("monitor-setup", false, "if set, the args are taken for the order of all monitors, and will move workspaces to the correct one")
 )
 
 func main() {
@@ -61,15 +63,23 @@ func main() {
 		log.Panicf("no focused workspace?")
 	}
 
-	if flag.NArg() == 0 {
-		// No args, just debug
-		log.Printf("no commands run, so just show some debug messages\nCurrent WS: %v\nCurrent con: %v", ws, curr)
-		return
-	}
-
 	displayAdder, err := ws.DisplayAdder(*perMonitorNumWS, *startNumber)
 	if err != nil {
 		log.Panicf("unable to find current display")
+	}
+
+	if flag.NArg() == 0 {
+		// No args, just debug
+		log.Printf("no commands run, so just show some debug messages\nCurrent WS: %v\nCurrent con: %v", ws, curr)
+		log.Printf("disp: %d", displayAdder)
+		return
+	}
+
+	if *monitorSetup {
+		// Here all args are the order of the monitors. Set it up
+		err = setupMonitors(ctx, sock, flag.Args())
+		log.Printf("done: %+v", err)
+		return
 	}
 
 	templ := template.New("i3cmd")
@@ -110,6 +120,21 @@ func sendMsg(ctx context.Context, sock net.Conn, typ uint32, data ...byte) ([]I3
 	}
 	var nodes []I3Node
 	return nodes, json.Unmarshal(msg.Payload, &nodes)
+}
+
+func setupMonitors(ctx context.Context, sock net.Conn, monitors []string) error {
+	var actions []string
+
+	for i, mon := range monitors {
+		for j := 0; j < *perMonitorNumWS; j++ {
+			ws := i**perMonitorNumWS + j + *startNumber
+			actions = append(actions, fmt.Sprintf("workspace %d,move workspace to output %s", ws, mon))
+		}
+	}
+	log.Printf("running commands: %+v", actions)
+	resp, err := sendMsg(ctx, sock, I3Command, []byte(strings.Join(actions, ";"))...)
+	log.Printf("resp: %+v", resp)
+	return err
 }
 
 type Message struct {
